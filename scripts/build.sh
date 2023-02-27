@@ -3,13 +3,16 @@
 ## WebRTC library build script
 ## Created by Stasel
 ## BSD-3 License
-## 
-## Example usage: MACOS=true IOS=true BUILD_VP9=true sh build.sh
+##
+## Example usage: MACOS=true IOS=true BUILD_VP9=true PATCH=false REMOVE_OUT=false sh build.sh
 
 # Configs
 DEBUG="${DEBUG:-false}"
 BUILD_VP9="${BUILD_VP9:-false}"
 BRANCH="${BRANCH:-master}"
+COMMIT="${COMMIT:-832ce5eae6}"
+PATCH="${PATCH:-true}"
+REMOVE_OUT="${REMOVE_OUT:-true}"
 IOS="${IOS:-false}"
 MACOS="${MACOS:-false}"
 MAC_CATALYST="${MAC_CATALYST:-false}"
@@ -84,16 +87,23 @@ fi
 cd src
 git fetch --all
 git checkout $BRANCH
+#git checkout --detach $COMMIT
 cd ..
 gclient sync --with_branch_heads --with_tags
 cd src
 
-# Step 2.5 - Apply patches (Temp)
+# Step 2.5 - Apply patches
 # sed -i '' 's/"-mllvm",$/# "-mllvm",/g' ./build/config/compiler/BUILD.gn
 # sed -i '' 's/"-instcombine-lower-dbg-declare=0",$/# "-instcombine-lower-dbg-declare=0",/g' ./build/config/compiler/BUILD.gn
 
+if [ "$PATCH" = true ]; then
+  git apply ../patches/*.patch
+fi
+
 # Step 3 - Compile and build all frameworks
-rm -rf $OUTPUT_DIR  
+if [ "$REMOVE_OUT" = true ]; then
+  rm -rf $OUTPUT_DIR
+fi
 
 if [ "$IOS" = true ]; then
     build_iOS "x64" "simulator"

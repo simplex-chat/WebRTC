@@ -1,0 +1,602 @@
+From dfe7805d74315177850ec46b5fe8e22b6a30bc39 Mon Sep 17 00:00:00 2001
+From: Stanislav Dmitrenko <avently@gmail.com>
+Date: Tue, 28 Feb 2023 00:25:34 +0300
+Subject: [PATCH] Frame encryption in non-native API - ability to add encryptor
+ (to RTCRtpSender) and decryptor (to RTCRtpReceiver) from Swift/Objective-C
+ code
+
+---
+ sdk/BUILD.gn                                  |  10 ++
+ .../RTCFrameDecryptor+Private.h               |  50 +++++++++
+ .../api/peerconnection/RTCFrameDecryptor.h    |  45 ++++++++
+ .../api/peerconnection/RTCFrameDecryptor.mm   |  98 +++++++++++++++++
+ .../RTCFrameEncryptor+Private.h               |  51 +++++++++
+ .../api/peerconnection/RTCFrameEncryptor.h    |  45 ++++++++
+ .../api/peerconnection/RTCFrameEncryptor.mm   | 100 ++++++++++++++++++
+ sdk/objc/api/peerconnection/RTCRtpReceiver.h  |   2 +
+ sdk/objc/api/peerconnection/RTCRtpReceiver.mm |   9 ++
+ sdk/objc/api/peerconnection/RTCRtpSender.h    |   3 +
+ sdk/objc/api/peerconnection/RTCRtpSender.mm   |   8 ++
+ 11 files changed, 421 insertions(+)
+ create mode 100644 sdk/objc/api/peerconnection/RTCFrameDecryptor+Private.h
+ create mode 100644 sdk/objc/api/peerconnection/RTCFrameDecryptor.h
+ create mode 100644 sdk/objc/api/peerconnection/RTCFrameDecryptor.mm
+ create mode 100644 sdk/objc/api/peerconnection/RTCFrameEncryptor+Private.h
+ create mode 100644 sdk/objc/api/peerconnection/RTCFrameEncryptor.h
+ create mode 100644 sdk/objc/api/peerconnection/RTCFrameEncryptor.mm
+
+diff --git a/sdk/BUILD.gn b/sdk/BUILD.gn
+index 971a323ef5..a9605a4533 100644
+--- a/sdk/BUILD.gn
++++ b/sdk/BUILD.gn
+@@ -956,6 +956,12 @@ if (is_ios || is_mac) {
+         "objc/api/peerconnection/RTCDtmfSender.mm",
+         "objc/api/peerconnection/RTCFieldTrials.h",
+         "objc/api/peerconnection/RTCFieldTrials.mm",
++        "objc/api/peerconnection/RTCFrameEncryptor+Private.h",
++        "objc/api/peerconnection/RTCFrameEncryptor.h",
++        "objc/api/peerconnection/RTCFrameEncryptor.mm",
++        "objc/api/peerconnection/RTCFrameDecryptor+Private.h",
++        "objc/api/peerconnection/RTCFrameDecryptor.h",
++        "objc/api/peerconnection/RTCFrameDecryptor.mm",
+         "objc/api/peerconnection/RTCIceCandidate+Private.h",
+         "objc/api/peerconnection/RTCIceCandidate.h",
+         "objc/api/peerconnection/RTCIceCandidate.mm",
+@@ -1302,6 +1308,8 @@ if (is_ios || is_mac) {
+           "objc/api/peerconnection/RTCDataChannel.h",
+           "objc/api/peerconnection/RTCDataChannelConfiguration.h",
+           "objc/api/peerconnection/RTCFieldTrials.h",
++          "objc/api/peerconnection/RTCFrameEncryptor.h",
++          "objc/api/peerconnection/RTCFrameDecryptor.h",
+           "objc/api/peerconnection/RTCIceCandidate.h",
+           "objc/api/peerconnection/RTCIceCandidateErrorEvent.h",
+           "objc/api/peerconnection/RTCIceServer.h",
+@@ -1419,6 +1427,8 @@ if (is_ios || is_mac) {
+           "objc/api/peerconnection/RTCDataChannelConfiguration.h",
+           "objc/api/peerconnection/RTCDtmfSender.h",
+           "objc/api/peerconnection/RTCFieldTrials.h",
++          "objc/api/peerconnection/RTCFrameEncryptor.h",
++          "objc/api/peerconnection/RTCFrameDecryptor.h",
+           "objc/api/peerconnection/RTCIceCandidate.h",
+           "objc/api/peerconnection/RTCIceCandidateErrorEvent.h",
+           "objc/api/peerconnection/RTCIceServer.h",
+diff --git a/sdk/objc/api/peerconnection/RTCFrameDecryptor+Private.h b/sdk/objc/api/peerconnection/RTCFrameDecryptor+Private.h
+new file mode 100644
+index 0000000000..dd59d1722f
+--- /dev/null
++++ b/sdk/objc/api/peerconnection/RTCFrameDecryptor+Private.h
+@@ -0,0 +1,50 @@
++/*
++ *  Copyright 2023 The WebRTC project authors. All Rights Reserved.
++ *
++ *  Use of this source code is governed by a BSD-style license
++ *  that can be found in the LICENSE file in the root of the source
++ *  tree. An additional intellectual property rights grant can be found
++ *  in the file PATENTS.  All contributing project authors may
++ *  be found in the AUTHORS file in the root of the source tree.
++ */
++
++#import "RTCFrameDecryptor.h"
++
++#include "api/crypto/frame_decryptor_interface.h"
++
++NS_ASSUME_NONNULL_BEGIN
++
++namespace webrtc {
++
++class RTCFrameDecryptorAdapter : public FrameDecryptorInterface {
++    public:
++        RTCFrameDecryptorAdapter(RTC_OBJC_TYPE(RTCFrameDecryptor) * decryptor, size_t sizeChange);
++        Result Decrypt(cricket::MediaType media_type,
++                const std::vector<uint32_t>& csrcs,
++                rtc::ArrayView<const uint8_t> additional_data,
++                rtc::ArrayView<const uint8_t> encrypted_frame,
++                rtc::ArrayView<uint8_t> frame) override;
++
++        size_t GetMaxPlaintextByteSize(cricket::MediaType media_type,
++                size_t encrypted_frame_size) override;
++
++        void AddRef() const override {}
++        rtc::RefCountReleaseStatus Release() const override {
++            return rtc::RefCountReleaseStatus::kDroppedLastRef;
++        }
++
++    private:
++        __weak RTC_OBJC_TYPE(RTCFrameDecryptor) * decryptor_;
++        size_t sizeChange_;
++    };
++
++}  // namespace webrtc
++
++@interface RTC_OBJC_TYPE (RTCFrameDecryptor)
++()
++
++@property(nonatomic, readonly) rtc::scoped_refptr<webrtc::FrameDecryptorInterface> nativeFrameDecryptor;
++
++@end
++
++NS_ASSUME_NONNULL_END
+diff --git a/sdk/objc/api/peerconnection/RTCFrameDecryptor.h b/sdk/objc/api/peerconnection/RTCFrameDecryptor.h
+new file mode 100644
+index 0000000000..3cb28fba79
+--- /dev/null
++++ b/sdk/objc/api/peerconnection/RTCFrameDecryptor.h
+@@ -0,0 +1,45 @@
++/*
++ *  Copyright 2023 The WebRTC project authors. All Rights Reserved.
++ *
++ *  Use of this source code is governed by a BSD-style license
++ *  that can be found in the LICENSE file in the root of the source
++ *  tree. An additional intellectual property rights grant can be found
++ *  in the file PATENTS.  All contributing project authors may
++ *  be found in the AUTHORS file in the root of the source tree.
++ */
++
++#import <Foundation/Foundation.h>
++#import "RTCMacros.h"
++
++typedef NS_ENUM(NSInteger, RTCRtpMediaType);
++
++NS_ASSUME_NONNULL_BEGIN
++
++@class RTC_OBJC_TYPE(RTCFrameDecryptor);
++
++RTC_OBJC_EXPORT
++@protocol RTC_OBJC_TYPE
++(RTCFrameDecryptorDelegate)<NSObject>
++
++/** Receives decryption events, should answer with decrypted data per frame */
++- (nullable NSData *)frameDecryptor: (RTC_OBJC_TYPE (RTCFrameDecryptor) *)decryptor mediaType: (RTCRtpMediaType)mediaType withFrame: (NSData *)encrypted;
++
++@end
++
++
++RTC_OBJC_EXPORT
++@protocol RTC_OBJC_TYPE
++(RTCFrameDecryptor)<NSObject>
++
++@property(nonatomic, weak) id<RTC_OBJC_TYPE(RTCFrameDecryptorDelegate)> delegate;
++
++@end
++
++RTC_OBJC_EXPORT
++@interface RTC_OBJC_TYPE (RTCFrameDecryptor) : NSObject <RTC_OBJC_TYPE(RTCFrameDecryptor)>
++/** Size change of frame after decryption (in bytes). Can be negative */
++- (instancetype)initWithSizeChange: (int) sizeChange NS_DESIGNATED_INITIALIZER;
++- (instancetype)init NS_UNAVAILABLE;
++@end
++
++NS_ASSUME_NONNULL_END
+diff --git a/sdk/objc/api/peerconnection/RTCFrameDecryptor.mm b/sdk/objc/api/peerconnection/RTCFrameDecryptor.mm
+new file mode 100644
+index 0000000000..a039a29094
+--- /dev/null
++++ b/sdk/objc/api/peerconnection/RTCFrameDecryptor.mm
+@@ -0,0 +1,98 @@
++/*
++ *  Copyright 2023 The WebRTC project authors. All Rights Reserved.
++ *
++ *  Use of this source code is governed by a BSD-style license
++ *  that can be found in the LICENSE file in the root of the source
++ *  tree. An additional intellectual property rights grant can be found
++ *  in the file PATENTS.  All contributing project authors may
++ *  be found in the AUTHORS file in the root of the source tree.
++ */
++
++#import <Foundation/Foundation.h>
++#import "RTCFrameDecryptor+Private.h"
++#import "base/RTCLogging.h"
++
++#include "rtc_base/checks.h"
++#include "api/crypto/frame_decryptor_interface.h"
++#include "RTCRtpReceiver+Private.h"
++
++namespace webrtc {
++RTCFrameDecryptorAdapter::RTCFrameDecryptorAdapter(RTC_OBJC_TYPE(RTCFrameDecryptor) * decryptor, size_t sizeChange) {
++  RTC_CHECK(decryptor);
++  decryptor_ = decryptor;
++  sizeChange_ = sizeChange;
++}
++
++RTCFrameDecryptorAdapter::Result RTCFrameDecryptorAdapter::Decrypt(
++    cricket::MediaType media_type,
++    const std::vector<uint32_t>& csrcs,
++    rtc::ArrayView<const uint8_t> additional_data,
++    rtc::ArrayView<const uint8_t> encrypted_frame,
++    rtc::ArrayView<uint8_t> frame) {
++  RTC_OBJC_TYPE(RTCFrameDecryptor) *decryptor = decryptor_;
++  NSData *encrypted = [NSData dataWithBytes: encrypted_frame.data() length: encrypted_frame.size()];
++  NSData *decrypted = [decryptor.delegate frameDecryptor:decryptor mediaType:[RTC_OBJC_TYPE(RTCRtpReceiver) mediaTypeForNativeMediaType: media_type] withFrame:encrypted];
++  if (decrypted) {
++    const char * decryptedBytes = (const char *)[decrypted bytes];
++    NSUInteger size = [decrypted length];
++    for (size_t i = 0; i < size; i++) {
++      frame[i] = decryptedBytes[i];
++    }
++    return Result(Status::kOk, size);
++  } else {
++    return Result(Status::kFailedToDecrypt, 0);
++  }
++
++}
++
++size_t RTCFrameDecryptorAdapter::GetMaxPlaintextByteSize(
++  cricket::MediaType media_type,
++  size_t encrypted_frame_size) {
++  return encrypted_frame_size + sizeChange_;
++}
++}  // namespace webrtc
++
++
++@implementation RTC_OBJC_TYPE (RTCFrameDecryptor) {
++  rtc::scoped_refptr<webrtc::FrameDecryptorInterface> _nativeFrameDecryptor;
++}
++
++@synthesize delegate = _delegate;
++@synthesize nativeFrameDecryptor = _nativeFrameDecryptor;
++
++- (NSString *)description {
++  return [NSString
++      stringWithFormat:@"RTC_OBJC_TYPE(RTCFrameDecryptor)"];
++}
++
++- (void)dealloc {
++  _nativeFrameDecryptor = nullptr;
++}
++
++- (BOOL)isEqual:(id)object {
++  if (self == object) {
++    return YES;
++  }
++  if (object == nil) {
++    return NO;
++  }
++  if (![object isMemberOfClass:[self class]]) {
++    return NO;
++  }
++  RTC_OBJC_TYPE(RTCFrameDecryptor) *decryptor = (RTC_OBJC_TYPE(RTCFrameDecryptor) *)object;
++  return _nativeFrameDecryptor == decryptor.nativeFrameDecryptor;
++}
++
++- (NSUInteger)hash {
++  return (NSUInteger)_nativeFrameDecryptor.get();
++}
++
++- (instancetype)initWithSizeChange:(int)sizeChange {
++  if (self = [super init]) {
++    RTCLogInfo(@"RTC_OBJC_TYPE(RTCFrameDecryptor)(%p): created decryptor: %@", self, self.description);
++    _nativeFrameDecryptor = new webrtc::RTCFrameDecryptorAdapter(self, sizeChange);
++  }
++  return self;
++}
++
++@end
+diff --git a/sdk/objc/api/peerconnection/RTCFrameEncryptor+Private.h b/sdk/objc/api/peerconnection/RTCFrameEncryptor+Private.h
+new file mode 100644
+index 0000000000..821761e5fa
+--- /dev/null
++++ b/sdk/objc/api/peerconnection/RTCFrameEncryptor+Private.h
+@@ -0,0 +1,51 @@
++/*
++ *  Copyright 2023 The WebRTC project authors. All Rights Reserved.
++ *
++ *  Use of this source code is governed by a BSD-style license
++ *  that can be found in the LICENSE file in the root of the source
++ *  tree. An additional intellectual property rights grant can be found
++ *  in the file PATENTS.  All contributing project authors may
++ *  be found in the AUTHORS file in the root of the source tree.
++ */
++
++#import "RTCFrameEncryptor.h"
++
++#include "api/crypto/frame_encryptor_interface.h"
++
++NS_ASSUME_NONNULL_BEGIN
++
++namespace webrtc {
++
++class RTCFrameEncryptorAdapter : public FrameEncryptorInterface {
++    public:
++        RTCFrameEncryptorAdapter(RTC_OBJC_TYPE(RTCFrameEncryptor) * encryptor, size_t sizeChange);
++        int Encrypt(cricket::MediaType media_type,
++                uint32_t ssrc,
++                rtc::ArrayView<const uint8_t> additional_data,
++                rtc::ArrayView<const uint8_t> frame,
++                rtc::ArrayView<uint8_t> encrypted_frame,
++                size_t* bytes_written) override;
++
++        size_t GetMaxCiphertextByteSize(cricket::MediaType media_type,
++                size_t frame_size) override;
++
++        void AddRef() const override {}
++        rtc::RefCountReleaseStatus Release() const override {
++            return rtc::RefCountReleaseStatus::kDroppedLastRef;
++        }
++
++    private:
++        __weak RTC_OBJC_TYPE(RTCFrameEncryptor) * encryptor_;
++        size_t sizeChange_;
++    };
++
++}  // namespace webrtc
++
++@interface RTC_OBJC_TYPE (RTCFrameEncryptor)
++()
++
++@property(nonatomic, readonly) rtc::scoped_refptr<webrtc::FrameEncryptorInterface> nativeFrameEncryptor;
++
++@end
++
++NS_ASSUME_NONNULL_END
+diff --git a/sdk/objc/api/peerconnection/RTCFrameEncryptor.h b/sdk/objc/api/peerconnection/RTCFrameEncryptor.h
+new file mode 100644
+index 0000000000..445649410f
+--- /dev/null
++++ b/sdk/objc/api/peerconnection/RTCFrameEncryptor.h
+@@ -0,0 +1,45 @@
++/*
++ *  Copyright 2023 The WebRTC project authors. All Rights Reserved.
++ *
++ *  Use of this source code is governed by a BSD-style license
++ *  that can be found in the LICENSE file in the root of the source
++ *  tree. An additional intellectual property rights grant can be found
++ *  in the file PATENTS.  All contributing project authors may
++ *  be found in the AUTHORS file in the root of the source tree.
++ */
++
++#import <Foundation/Foundation.h>
++#import "RTCMacros.h"
++
++typedef NS_ENUM(NSInteger, RTCRtpMediaType);
++
++NS_ASSUME_NONNULL_BEGIN
++
++@class RTC_OBJC_TYPE(RTCFrameEncryptor);
++
++RTC_OBJC_EXPORT
++@protocol RTC_OBJC_TYPE
++(RTCFrameEncryptorDelegate)<NSObject>
++
++/** Receives encryption events, should answer with encrypted data per frame */
++- (nullable NSData *)frameEncryptor: (RTC_OBJC_TYPE (RTCFrameEncryptor) *)encryptor mediaType: (RTCRtpMediaType)mediaType withFrame: (NSData *)unencrypted;
++
++@end
++
++
++RTC_OBJC_EXPORT
++@protocol RTC_OBJC_TYPE
++(RTCFrameEncryptor)<NSObject>
++
++@property(nonatomic, weak) id<RTC_OBJC_TYPE(RTCFrameEncryptorDelegate)> delegate;
++
++@end
++
++RTC_OBJC_EXPORT
++@interface RTC_OBJC_TYPE (RTCFrameEncryptor) : NSObject <RTC_OBJC_TYPE(RTCFrameEncryptor)>
++/** Size change of frame after encryption (in bytes). Can be negative */
++- (instancetype)initWithSizeChange: (int) sizeChange NS_DESIGNATED_INITIALIZER;
++- (instancetype)init NS_UNAVAILABLE;
++@end
++
++NS_ASSUME_NONNULL_END
+diff --git a/sdk/objc/api/peerconnection/RTCFrameEncryptor.mm b/sdk/objc/api/peerconnection/RTCFrameEncryptor.mm
+new file mode 100644
+index 0000000000..5242859dc1
+--- /dev/null
++++ b/sdk/objc/api/peerconnection/RTCFrameEncryptor.mm
+@@ -0,0 +1,100 @@
++/*
++ *  Copyright 2023 The WebRTC project authors. All Rights Reserved.
++ *
++ *  Use of this source code is governed by a BSD-style license
++ *  that can be found in the LICENSE file in the root of the source
++ *  tree. An additional intellectual property rights grant can be found
++ *  in the file PATENTS.  All contributing project authors may
++ *  be found in the AUTHORS file in the root of the source tree.
++ */
++
++#import <Foundation/Foundation.h>
++#import "RTCFrameEncryptor+Private.h"
++#import "base/RTCLogging.h"
++
++#include "rtc_base/checks.h"
++#include "api/crypto/frame_encryptor_interface.h"
++#include "RTCRtpReceiver+Private.h"
++
++namespace webrtc {
++RTCFrameEncryptorAdapter::RTCFrameEncryptorAdapter(RTC_OBJC_TYPE(RTCFrameEncryptor) * encryptor, size_t sizeChange) {
++  RTC_CHECK(encryptor);
++  encryptor_ = encryptor;
++  sizeChange_ = sizeChange;
++}
++
++int RTCFrameEncryptorAdapter::Encrypt(
++    cricket::MediaType media_type,
++    uint32_t ssrc,
++    rtc::ArrayView<const uint8_t> additional_data,
++    rtc::ArrayView<const uint8_t> frame,
++    rtc::ArrayView<uint8_t> encrypted_frame,
++    size_t* bytes_written) {
++  RTC_OBJC_TYPE(RTCFrameEncryptor) *encryptor = encryptor_;
++  NSData *unencrypted = [NSData dataWithBytes: frame.data() length: frame.size()];
++  NSData *encrypted = [encryptor.delegate frameEncryptor:encryptor mediaType:[RTC_OBJC_TYPE(RTCRtpReceiver) mediaTypeForNativeMediaType: media_type] withFrame:unencrypted];
++  if (encrypted) {
++    const char *encryptedBytes = (const char *)[encrypted bytes];
++    NSUInteger size = [encrypted length];
++    for (size_t i = 0; i < size; i++) {
++      encrypted_frame[i] = encryptedBytes[i];
++    }
++    *bytes_written = size;
++    return 0;
++  } else {
++    return 1;
++  }
++
++}
++
++size_t RTCFrameEncryptorAdapter::GetMaxCiphertextByteSize(
++  cricket::MediaType media_type,
++  size_t frame_size) {
++  return frame_size + sizeChange_;
++}
++}  // namespace webrtc
++
++
++@implementation RTC_OBJC_TYPE (RTCFrameEncryptor) {
++  rtc::scoped_refptr<webrtc::FrameEncryptorInterface> _nativeFrameEncryptor;
++}
++
++@synthesize delegate = _delegate;
++@synthesize nativeFrameEncryptor = _nativeFrameEncryptor;
++
++- (NSString *)description {
++  return [NSString
++      stringWithFormat:@"RTC_OBJC_TYPE(RTCFrameEncryptor)"];
++}
++
++- (void)dealloc {
++  _nativeFrameEncryptor = nullptr;
++}
++
++- (BOOL)isEqual:(id)object {
++  if (self == object) {
++    return YES;
++  }
++  if (object == nil) {
++    return NO;
++  }
++  if (![object isMemberOfClass:[self class]]) {
++    return NO;
++  }
++  RTC_OBJC_TYPE(RTCFrameEncryptor) *encryptor = (RTC_OBJC_TYPE(RTCFrameEncryptor) *)object;
++  return _nativeFrameEncryptor == encryptor.nativeFrameEncryptor;
++}
++
++- (NSUInteger)hash {
++  return (NSUInteger)_nativeFrameEncryptor.get();
++}
++
++- (instancetype)initWithSizeChange:(int)sizeChange {
++  if (self = [super init]) {
++    RTCLogInfo(@"RTC_OBJC_TYPE(RTCFrameEncryptor)(%p): created encryptor: %@", self, self.description);
++    _nativeFrameEncryptor = new webrtc::RTCFrameEncryptorAdapter(self, sizeChange);
++  }
++  return self;
++}
++
++@end
+diff --git a/sdk/objc/api/peerconnection/RTCRtpReceiver.h b/sdk/objc/api/peerconnection/RTCRtpReceiver.h
+index 1e407fd71b..8adfeae017 100644
+--- a/sdk/objc/api/peerconnection/RTCRtpReceiver.h
++++ b/sdk/objc/api/peerconnection/RTCRtpReceiver.h
+@@ -13,6 +13,7 @@
+ #import "RTCMacros.h"
+ #import "RTCMediaStreamTrack.h"
+ #import "RTCRtpParameters.h"
++#import "RTCFrameDecryptor.h"
+ 
+ NS_ASSUME_NONNULL_BEGIN
+ 
+@@ -74,6 +75,7 @@ RTC_OBJC_EXPORT
+ /** The delegate for this RtpReceiver. */
+ @property(nonatomic, weak) id<RTC_OBJC_TYPE(RTCRtpReceiverDelegate)> delegate;
+ 
++- (void)setRtcFrameDecryptor : (RTC_OBJC_TYPE(RTCFrameDecryptor) *)frameDecryptor;
+ @end
+ 
+ RTC_OBJC_EXPORT
+diff --git a/sdk/objc/api/peerconnection/RTCRtpReceiver.mm b/sdk/objc/api/peerconnection/RTCRtpReceiver.mm
+index 60af86ac1b..6af0563576 100644
+--- a/sdk/objc/api/peerconnection/RTCRtpReceiver.mm
++++ b/sdk/objc/api/peerconnection/RTCRtpReceiver.mm
+@@ -15,8 +15,10 @@
+ #import "RTCRtpReceiver+Native.h"
+ #import "base/RTCLogging.h"
+ #import "helpers/NSString+StdString.h"
++#import "RTCFrameDecryptor+Private.h"
+ 
+ #include "api/media_stream_interface.h"
++#include "api/crypto/frame_decryptor_interface.h"
+ 
+ namespace webrtc {
+ 
+@@ -39,6 +41,7 @@ @implementation RTC_OBJC_TYPE (RTCRtpReceiver) {
+   RTC_OBJC_TYPE(RTCPeerConnectionFactory) * _factory;
+   rtc::scoped_refptr<webrtc::RtpReceiverInterface> _nativeRtpReceiver;
+   std::unique_ptr<webrtc::RtpReceiverDelegateAdapter> _observer;
++  rtc::scoped_refptr<webrtc::FrameDecryptorInterface> _nativeFrameDecryptor;
+ }
+ 
+ @synthesize delegate = _delegate;
+@@ -70,6 +73,7 @@ - (NSString *)description {
+ - (void)dealloc {
+   if (_nativeRtpReceiver) {
+     _nativeRtpReceiver->SetObserver(nullptr);
++    _nativeFrameDecryptor = nullptr;
+   }
+ }
+ 
+@@ -91,6 +95,11 @@ - (NSUInteger)hash {
+   return (NSUInteger)_nativeRtpReceiver.get();
+ }
+ 
++- (void)setRtcFrameDecryptor:(RTC_OBJC_TYPE(RTCFrameDecryptor) *)frameDecryptor {
++  _nativeFrameDecryptor = frameDecryptor.nativeFrameDecryptor;
++  _nativeRtpReceiver->SetFrameDecryptor(_nativeFrameDecryptor);
++}
++
+ #pragma mark - Native
+ 
+ - (void)setFrameDecryptor:(rtc::scoped_refptr<webrtc::FrameDecryptorInterface>)frameDecryptor {
+diff --git a/sdk/objc/api/peerconnection/RTCRtpSender.h b/sdk/objc/api/peerconnection/RTCRtpSender.h
+index fcdf199869..e365890716 100644
+--- a/sdk/objc/api/peerconnection/RTCRtpSender.h
++++ b/sdk/objc/api/peerconnection/RTCRtpSender.h
+@@ -14,6 +14,7 @@
+ #import "RTCMacros.h"
+ #import "RTCMediaStreamTrack.h"
+ #import "RTCRtpParameters.h"
++#import "RTCFrameEncryptor.h"
+ 
+ NS_ASSUME_NONNULL_BEGIN
+ 
+@@ -42,6 +43,8 @@ RTC_OBJC_EXPORT
+ /** The RTCDtmfSender accociated with the RTP sender. */
+ @property(nonatomic, readonly, nullable) id<RTC_OBJC_TYPE(RTCDtmfSender)> dtmfSender;
+ 
++-(void)setRtcFrameEncryptor : (RTC_OBJC_TYPE(RTCFrameEncryptor) *)frameEncryptor;
++
+ @end
+ 
+ RTC_OBJC_EXPORT
+diff --git a/sdk/objc/api/peerconnection/RTCRtpSender.mm b/sdk/objc/api/peerconnection/RTCRtpSender.mm
+index 4fadb30f49..622cb18867 100644
+--- a/sdk/objc/api/peerconnection/RTCRtpSender.mm
++++ b/sdk/objc/api/peerconnection/RTCRtpSender.mm
+@@ -16,8 +16,10 @@
+ #import "RTCRtpSender+Native.h"
+ #import "base/RTCLogging.h"
+ #import "helpers/NSString+StdString.h"
++#import "RTCFrameEncryptor+Private.h"
+ 
+ #include "api/media_stream_interface.h"
++#include "api/crypto/frame_encryptor_interface.h"
+ 
+ @implementation RTC_OBJC_TYPE (RTCRtpSender) {
+   RTC_OBJC_TYPE(RTCPeerConnectionFactory) * _factory;
+@@ -97,6 +99,12 @@ - (NSUInteger)hash {
+   return (NSUInteger)_nativeRtpSender.get();
+ }
+ 
++- (void)setRtcFrameEncryptor:(RTC_OBJC_TYPE(RTCFrameEncryptor) *)frameEncryptor {
++  rtc::scoped_refptr<webrtc::FrameEncryptorInterface>
++          _nativeFrameEncryptor = frameEncryptor.nativeFrameEncryptor;
++  _nativeRtpSender->SetFrameEncryptor(_nativeFrameEncryptor);
++}
++
+ #pragma mark - Native
+ 
+ - (void)setFrameEncryptor:(rtc::scoped_refptr<webrtc::FrameEncryptorInterface>)frameEncryptor {
+-- 
+2.37.1 (Apple Git-137.1)
+

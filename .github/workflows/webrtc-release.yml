@@ -1,6 +1,6 @@
 name: WebRTC Release
 run-name: WebRTC Release
-on: repository_dispatch
+on: workflow_dispatch
 jobs:
   Build-Script:
     runs-on: macos-latest

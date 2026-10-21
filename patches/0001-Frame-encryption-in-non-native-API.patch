@@ -1,5 +1,5 @@
 diff --git a/sdk/BUILD.gn b/sdk/BUILD.gn
-index aeb65e1..9591156 100644
+index aeb65e1..5e51ce7 100644
 --- a/sdk/BUILD.gn
 +++ b/sdk/BUILD.gn
 @@ -1000,6 +1000,12 @@ if (is_ios || is_mac) {
@@ -23,7 +23,15 @@ index aeb65e1..9591156 100644
          "../api:media_stream_interface",
          "../api:peer_connection_interface",
          "../api:rtc_event_log_output_file",
-@@ -1375,6 +1382,8 @@ if (is_ios || is_mac) {
+@@ -1197,6 +1204,7 @@ if (is_ios || is_mac) {
+             "objc/unittests/RTCDefaultVideoEncoderFactory_xctest.mm",
+             "objc/unittests/RTCEncodedImage_xctest.mm",
+             "objc/unittests/RTCFileVideoCapturer_xctest.mm",
++            "objc/unittests/RTCFrameEncryption_xctest.mm",
+             "objc/unittests/RTCH264ProfileLevelId_xctest.m",
+             "objc/unittests/RTCIceCandidateTest.mm",
+             "objc/unittests/RTCIceServerTest.mm",
+@@ -1375,6 +1383,8 @@ if (is_ios || is_mac) {
            "objc/api/peerconnection/RTCDataChannel.h",
            "objc/api/peerconnection/RTCDataChannelConfiguration.h",
            "objc/api/peerconnection/RTCFieldTrials.h",
@@ -32,7 +40,7 @@ index aeb65e1..9591156 100644
            "objc/api/peerconnection/RTCIceCandidate.h",
            "objc/api/peerconnection/RTCIceCandidateErrorEvent.h",
            "objc/api/peerconnection/RTCIceServer.h",
-@@ -1495,6 +1504,8 @@ if (is_ios || is_mac) {
+@@ -1495,6 +1505,8 @@ if (is_ios || is_mac) {
            "objc/api/peerconnection/RTCDtlsFingerprint.h",
            "objc/api/peerconnection/RTCDtmfSender.h",
            "objc/api/peerconnection/RTCFieldTrials.h",
@@ -99,10 +107,10 @@ index 0000000..522401c
 +NS_ASSUME_NONNULL_END
 diff --git a/sdk/objc/api/peerconnection/RTCFrameDecryptor.h b/sdk/objc/api/peerconnection/RTCFrameDecryptor.h
 new file mode 100644
-index 0000000..6b6b1b8
+index 0000000..c7fc1d3
 --- /dev/null
 +++ b/sdk/objc/api/peerconnection/RTCFrameDecryptor.h
-@@ -0,0 +1,50 @@
+@@ -0,0 +1,52 @@
 +/*
 + *  Copyright 2023 The WebRTC project authors. All Rights Reserved.
 + *
@@ -127,7 +135,9 @@ index 0000000..6b6b1b8
 +@protocol RTC_OBJC_TYPE
 +(RTCFrameDecryptorDelegate)<NSObject>
 +
-+    /** Returns the decrypted frame, or nil to drop it. */
++    /** Called on a WebRTC decoder thread. `encrypted` borrows WebRTC's
++     * buffer and is valid only during the call. Returns the decrypted
++     * frame, or nil to drop it. */
 +    - (nullable NSData *)frameDecryptor
 +    : (RTC_OBJC_TYPE(RTCFrameDecryptor) *)decryptor mediaType
 +    : (RTCRtpMediaType)mediaType withFrame : (NSData *)encrypted;
@@ -155,10 +165,10 @@ index 0000000..6b6b1b8
 +NS_ASSUME_NONNULL_END
 diff --git a/sdk/objc/api/peerconnection/RTCFrameDecryptor.mm b/sdk/objc/api/peerconnection/RTCFrameDecryptor.mm
 new file mode 100644
-index 0000000..02dcdae
+index 0000000..f0aafd5
 --- /dev/null
 +++ b/sdk/objc/api/peerconnection/RTCFrameDecryptor.mm
-@@ -0,0 +1,105 @@
+@@ -0,0 +1,111 @@
 +/*
 + *  Copyright 2023 The WebRTC project authors. All Rights Reserved.
 + *
@@ -175,7 +185,6 @@ index 0000000..02dcdae
 +#import "base/RTCLogging.h"
 +
 +#include <algorithm>
-+#include <cstring>
 +
 +#include "api/make_ref_counted.h"
 +#include "rtc_base/checks.h"
@@ -194,19 +203,26 @@ index 0000000..02dcdae
 +    std::span<const uint8_t> additional_data,
 +    std::span<const uint8_t> encrypted_frame,
 +    std::span<uint8_t> frame) {
-+  RTC_OBJC_TYPE(RTCFrameDecryptor) *decryptor = decryptor_;
-+  NSData *encrypted = [NSData dataWithBytes:encrypted_frame.data()
-+                                     length:encrypted_frame.size()];
-+  NSData *decrypted = [decryptor.delegate
-+      frameDecryptor:decryptor
-+           mediaType:[RTC_OBJC_TYPE(RTCRtpReceiver)
-+                         mediaTypeForNativeMediaType:media_type]
-+           withFrame:encrypted];
-+  if (decrypted == nil || decrypted.length > frame.size()) {
-+    return Result(Status::kFailedToDecrypt, 0);
++  // Releases per-frame objects here rather than in the calling thread's pool.
++  @autoreleasepool {
++    RTC_OBJC_TYPE(RTCFrameDecryptor) *decryptor = decryptor_;
++    NSData *encrypted = [NSData
++        dataWithBytesNoCopy:const_cast<uint8_t *>(encrypted_frame.data())
++                     length:encrypted_frame.size()
++               freeWhenDone:NO];
++    NSData *decrypted = [decryptor.delegate
++        frameDecryptor:decryptor
++             mediaType:[RTC_OBJC_TYPE(RTCRtpReceiver)
++                           mediaTypeForNativeMediaType:media_type]
++             withFrame:encrypted];
++    if (decrypted == nil || decrypted.length > frame.size()) {
++      return Result(Status::kFailedToDecrypt, 0);
++    }
++    std::copy_n(static_cast<const uint8_t *>(decrypted.bytes),
++                decrypted.length,
++                frame.data());
++    return Result(Status::kOk, decrypted.length);
 +  }
-+  std::memcpy(frame.data(), decrypted.bytes, decrypted.length);
-+  return Result(Status::kOk, decrypted.length);
 +}
 +
 +size_t RTCFrameDecryptorAdapter::GetMaxPlaintextByteSize(
@@ -266,10 +282,10 @@ index 0000000..02dcdae
 +@end
 diff --git a/sdk/objc/api/peerconnection/RTCFrameEncryptor+Private.h b/sdk/objc/api/peerconnection/RTCFrameEncryptor+Private.h
 new file mode 100644
-index 0000000..b72c223
+index 0000000..6493b22
 --- /dev/null
 +++ b/sdk/objc/api/peerconnection/RTCFrameEncryptor+Private.h
-@@ -0,0 +1,51 @@
+@@ -0,0 +1,53 @@
 +/*
 + *  Copyright 2023 The WebRTC project authors. All Rights Reserved.
 + *
@@ -291,6 +307,8 @@ index 0000000..b72c223
 +
 +class RTCFrameEncryptorAdapter : public FrameEncryptorInterface {
 + public:
++  static constexpr int kEncryptionFailed = 1;
++
 +  RTCFrameEncryptorAdapter(RTC_OBJC_TYPE(RTCFrameEncryptor) * encryptor,
 +                           int size_change);
 +
@@ -323,10 +341,10 @@ index 0000000..b72c223
 +NS_ASSUME_NONNULL_END
 diff --git a/sdk/objc/api/peerconnection/RTCFrameEncryptor.h b/sdk/objc/api/peerconnection/RTCFrameEncryptor.h
 new file mode 100644
-index 0000000..b879e66
+index 0000000..f062dc7
 --- /dev/null
 +++ b/sdk/objc/api/peerconnection/RTCFrameEncryptor.h
-@@ -0,0 +1,50 @@
+@@ -0,0 +1,52 @@
 +/*
 + *  Copyright 2023 The WebRTC project authors. All Rights Reserved.
 + *
@@ -351,7 +369,9 @@ index 0000000..b879e66
 +@protocol RTC_OBJC_TYPE
 +(RTCFrameEncryptorDelegate)<NSObject>
 +
-+    /** Returns the encrypted frame, or nil to drop it. */
++    /** Called on a WebRTC encoder thread. `unencrypted` borrows WebRTC's
++     * buffer and is valid only during the call. Returns the encrypted
++     * frame, or nil to drop it. */
 +    - (nullable NSData *)frameEncryptor
 +    : (RTC_OBJC_TYPE(RTCFrameEncryptor) *)encryptor mediaType
 +    : (RTCRtpMediaType)mediaType withFrame : (NSData *)unencrypted;
@@ -379,10 +399,10 @@ index 0000000..b879e66
 +NS_ASSUME_NONNULL_END
 diff --git a/sdk/objc/api/peerconnection/RTCFrameEncryptor.mm b/sdk/objc/api/peerconnection/RTCFrameEncryptor.mm
 new file mode 100644
-index 0000000..472f16e
+index 0000000..1ef3dba
 --- /dev/null
 +++ b/sdk/objc/api/peerconnection/RTCFrameEncryptor.mm
-@@ -0,0 +1,105 @@
+@@ -0,0 +1,112 @@
 +/*
 + *  Copyright 2023 The WebRTC project authors. All Rights Reserved.
 + *
@@ -399,7 +419,6 @@ index 0000000..472f16e
 +#import "base/RTCLogging.h"
 +
 +#include <algorithm>
-+#include <cstring>
 +
 +#include "api/make_ref_counted.h"
 +#include "rtc_base/checks.h"
@@ -418,19 +437,27 @@ index 0000000..472f16e
 +                                      std::span<const uint8_t> frame,
 +                                      std::span<uint8_t> encrypted_frame,
 +                                      size_t *bytes_written) {
-+  RTC_OBJC_TYPE(RTCFrameEncryptor) *encryptor = encryptor_;
-+  NSData *unencrypted = [NSData dataWithBytes:frame.data() length:frame.size()];
-+  NSData *encrypted = [encryptor.delegate
-+      frameEncryptor:encryptor
-+           mediaType:[RTC_OBJC_TYPE(RTCRtpReceiver)
-+                         mediaTypeForNativeMediaType:media_type]
-+           withFrame:unencrypted];
-+  if (encrypted == nil || encrypted.length > encrypted_frame.size()) {
-+    return 1;
++  // Releases per-frame objects here rather than in the calling thread's pool.
++  @autoreleasepool {
++    RTC_OBJC_TYPE(RTCFrameEncryptor) *encryptor = encryptor_;
++    NSData *unencrypted =
++        [NSData dataWithBytesNoCopy:const_cast<uint8_t *>(frame.data())
++                             length:frame.size()
++                       freeWhenDone:NO];
++    NSData *encrypted = [encryptor.delegate
++        frameEncryptor:encryptor
++             mediaType:[RTC_OBJC_TYPE(RTCRtpReceiver)
++                           mediaTypeForNativeMediaType:media_type]
++             withFrame:unencrypted];
++    if (encrypted == nil || encrypted.length > encrypted_frame.size()) {
++      return kEncryptionFailed;
++    }
++    std::copy_n(static_cast<const uint8_t *>(encrypted.bytes),
++                encrypted.length,
++                encrypted_frame.data());
++    *bytes_written = encrypted.length;
++    return 0;
 +  }
-+  std::memcpy(encrypted_frame.data(), encrypted.bytes, encrypted.length);
-+  *bytes_written = encrypted.length;
-+  return 0;
 +}
 +
 +size_t RTCFrameEncryptorAdapter::GetMaxCiphertextByteSize(MediaType media_type,
@@ -578,3 +605,313 @@ index f3135c6..b8a2547 100644
  #pragma mark - Native
  
  - (void)setFrameEncryptor:
+diff --git a/sdk/objc/unittests/RTCFrameEncryption_xctest.mm b/sdk/objc/unittests/RTCFrameEncryption_xctest.mm
+new file mode 100644
+index 0000000..84dc5fc
+--- /dev/null
++++ b/sdk/objc/unittests/RTCFrameEncryption_xctest.mm
+@@ -0,0 +1,304 @@
++/*
++ *  Copyright 2026 The WebRTC project authors. All Rights Reserved.
++ *
++ *  Use of this source code is governed by a BSD-style license
++ *  that can be found in the LICENSE file in the root of the source
++ *  tree. An additional intellectual property rights grant can be found
++ *  in the file PATENTS.  All contributing project authors may
++ *  be found in the AUTHORS file in the root of the source tree.
++ */
++
++#import <Foundation/Foundation.h>
++#import <XCTest/XCTest.h>
++
++#include <cstdint>
++#include <vector>
++
++#import "api/peerconnection/RTCConfiguration.h"
++#import "api/peerconnection/RTCFrameDecryptor+Private.h"
++#import "api/peerconnection/RTCFrameEncryptor+Private.h"
++#import "api/peerconnection/RTCMediaConstraints.h"
++#import "api/peerconnection/RTCPeerConnection.h"
++#import "api/peerconnection/RTCPeerConnectionFactory.h"
++#import "api/peerconnection/RTCRtpReceiver+Private.h"
++#import "api/peerconnection/RTCRtpSender+Private.h"
++#import "api/peerconnection/RTCRtpTransceiver.h"
++
++typedef NSData *_Nullable (^RTCFrameTransform)(NSData *frame);
++
++@interface RTCFrameTransformDelegate
++    : NSObject <RTC_OBJC_TYPE (RTCFrameEncryptorDelegate),
++                RTC_OBJC_TYPE (RTCFrameDecryptorDelegate)>
++@property(nonatomic, copy) RTCFrameTransform transform;
++@property(nonatomic, readonly) RTCRtpMediaType lastMediaType;
++@property(nonatomic, readonly) const void *lastFrameBytes;
++
++- (instancetype)initWithTransform:(RTCFrameTransform)transform;
++
++@end
++
++@implementation RTCFrameTransformDelegate
++
++@synthesize transform = _transform;
++@synthesize lastMediaType = _lastMediaType;
++@synthesize lastFrameBytes = _lastFrameBytes;
++
++- (instancetype)initWithTransform:(RTCFrameTransform)transform {
++  self = [super init];
++  if (self) {
++    _transform = transform;
++    _lastMediaType = RTCRtpMediaTypeUnsupported;
++  }
++  return self;
++}
++
++- (nullable NSData *)frameEncryptor:
++                         (RTC_OBJC_TYPE(RTCFrameEncryptor) *)encryptor
++                          mediaType:(RTCRtpMediaType)mediaType
++                          withFrame:(NSData *)unencrypted {
++  return [self record:mediaType frame:unencrypted];
++}
++
++- (nullable NSData *)frameDecryptor:
++                         (RTC_OBJC_TYPE(RTCFrameDecryptor) *)decryptor
++                          mediaType:(RTCRtpMediaType)mediaType
++                          withFrame:(NSData *)encrypted {
++  return [self record:mediaType frame:encrypted];
++}
++
++- (nullable NSData *)record:(RTCRtpMediaType)mediaType frame:(NSData *)frame {
++  _lastMediaType = mediaType;
++  _lastFrameBytes = frame.bytes;
++  return _transform(frame);
++}
++
++@end
++
++static RTCFrameTransform AppendBytes(NSUInteger count, uint8_t value) {
++  return ^NSData *(NSData *frame) {
++    NSMutableData *result = [frame mutableCopy];
++    std::vector<uint8_t> tail(count, value);
++    [result appendBytes:tail.data() length:tail.size()];
++    return result;
++  };
++}
++
++static RTCFrameTransform DropLastBytes(NSUInteger count) {
++  return ^NSData *(NSData *frame) {
++    return [frame subdataWithRange:NSMakeRange(0, frame.length - count)];
++  };
++}
++
++static constexpr uint8_t kFillByte = 0xAA;
++static constexpr size_t kUnwritten = 12345;
++
++@interface RTCFrameEncryptionTest : XCTestCase
++@end
++
++@implementation RTCFrameEncryptionTest
++
++- (void)testEncryptCopiesDelegateOutputIntoBuffer {
++  RTCFrameTransformDelegate *delegate = [[RTCFrameTransformDelegate alloc]
++      initWithTransform:AppendBytes(4, kFillByte)];
++  RTC_OBJC_TYPE(RTCFrameEncryptor) *encryptor =
++      [[RTC_OBJC_TYPE(RTCFrameEncryptor) alloc] initWithSizeChange:4];
++  encryptor.delegate = delegate;
++  webrtc::scoped_refptr<webrtc::FrameEncryptorInterface> native =
++      encryptor.nativeFrameEncryptor;
++
++  const std::vector<uint8_t> frame = {1, 2, 3};
++  std::vector<uint8_t> output(
++      native->GetMaxCiphertextByteSize(webrtc::MediaType::AUDIO, frame.size()));
++  size_t written = kUnwritten;
++  int status =
++      native->Encrypt(webrtc::MediaType::AUDIO, 0, {}, frame, output, &written);
++
++  XCTAssertEqual(status, 0);
++  XCTAssertEqual(written, 7u);
++  XCTAssertTrue((output ==
++                 std::vector<uint8_t>{
++                     1, 2, 3, kFillByte, kFillByte, kFillByte, kFillByte}));
++  XCTAssertEqual(delegate.lastMediaType, RTCRtpMediaTypeAudio);
++  XCTAssertTrue(delegate.lastFrameBytes == frame.data(),
++                @"Delegate should receive WebRTC's buffer without a copy");
++}
++
++- (void)testEncryptRejectsOutputLargerThanBuffer {
++  RTCFrameTransformDelegate *delegate = [[RTCFrameTransformDelegate alloc]
++      initWithTransform:AppendBytes(8, kFillByte)];
++  RTC_OBJC_TYPE(RTCFrameEncryptor) *encryptor =
++      [[RTC_OBJC_TYPE(RTCFrameEncryptor) alloc] initWithSizeChange:4];
++  encryptor.delegate = delegate;
++  webrtc::scoped_refptr<webrtc::FrameEncryptorInterface> native =
++      encryptor.nativeFrameEncryptor;
++
++  const std::vector<uint8_t> frame = {1, 2, 3};
++  std::vector<uint8_t> output(
++      native->GetMaxCiphertextByteSize(webrtc::MediaType::AUDIO, frame.size()));
++  size_t written = kUnwritten;
++  int status =
++      native->Encrypt(webrtc::MediaType::AUDIO, 0, {}, frame, output, &written);
++
++  XCTAssertEqual(status, webrtc::RTCFrameEncryptorAdapter::kEncryptionFailed);
++  XCTAssertEqual(written, kUnwritten);
++  XCTAssertTrue((output == std::vector<uint8_t>(7, 0)),
++                @"Buffer must stay untouched when output does not fit");
++}
++
++- (void)testEncryptFailsWithoutDelegate {
++  RTC_OBJC_TYPE(RTCFrameEncryptor) *encryptor =
++      [[RTC_OBJC_TYPE(RTCFrameEncryptor) alloc] initWithSizeChange:4];
++  webrtc::scoped_refptr<webrtc::FrameEncryptorInterface> native =
++      encryptor.nativeFrameEncryptor;
++
++  const std::vector<uint8_t> frame = {1, 2, 3};
++  std::vector<uint8_t> output(7);
++  size_t written = kUnwritten;
++  int status =
++      native->Encrypt(webrtc::MediaType::VIDEO, 0, {}, frame, output, &written);
++
++  XCTAssertEqual(status, webrtc::RTCFrameEncryptorAdapter::kEncryptionFailed);
++  XCTAssertEqual(written, kUnwritten);
++}
++
++- (void)testEncryptFailsAfterEncryptorIsReleased {
++  RTCFrameTransformDelegate *delegate = [[RTCFrameTransformDelegate alloc]
++      initWithTransform:AppendBytes(4, kFillByte)];
++  webrtc::scoped_refptr<webrtc::FrameEncryptorInterface> native;
++  @autoreleasepool {
++    RTC_OBJC_TYPE(RTCFrameEncryptor) *encryptor =
++        [[RTC_OBJC_TYPE(RTCFrameEncryptor) alloc] initWithSizeChange:4];
++    encryptor.delegate = delegate;
++    native = encryptor.nativeFrameEncryptor;
++  }
++
++  const std::vector<uint8_t> frame = {1, 2, 3};
++  std::vector<uint8_t> output(7);
++  size_t written = kUnwritten;
++  int status =
++      native->Encrypt(webrtc::MediaType::AUDIO, 0, {}, frame, output, &written);
++
++  XCTAssertEqual(status,
++                 webrtc::RTCFrameEncryptorAdapter::kEncryptionFailed,
++                 @"A sender may keep the adapter after the encryptor is gone");
++  XCTAssertTrue(delegate.lastFrameBytes == nullptr,
++                @"Delegate must not be called once the encryptor is gone");
++}
++
++- (void)testDecryptCopiesDelegateOutputIntoBuffer {
++  RTCFrameTransformDelegate *delegate =
++      [[RTCFrameTransformDelegate alloc] initWithTransform:DropLastBytes(2)];
++  RTC_OBJC_TYPE(RTCFrameDecryptor) *decryptor =
++      [[RTC_OBJC_TYPE(RTCFrameDecryptor) alloc] initWithSizeChange:0];
++  decryptor.delegate = delegate;
++  webrtc::scoped_refptr<webrtc::FrameDecryptorInterface> native =
++      decryptor.nativeFrameDecryptor;
++
++  const std::vector<uint8_t> encrypted = {1, 2, 3, 4, 5};
++  std::vector<uint8_t> output(native->GetMaxPlaintextByteSize(
++      webrtc::MediaType::VIDEO, encrypted.size()));
++  webrtc::FrameDecryptorInterface::Result result =
++      native->Decrypt(webrtc::MediaType::VIDEO, {}, {}, encrypted, output);
++
++  XCTAssertTrue(result.IsOk());
++  XCTAssertEqual(result.bytes_written, 3u);
++  XCTAssertTrue((output == std::vector<uint8_t>{1, 2, 3, 0, 0}));
++  XCTAssertEqual(delegate.lastMediaType, RTCRtpMediaTypeVideo);
++  XCTAssertTrue(delegate.lastFrameBytes == encrypted.data(),
++                @"Delegate should receive WebRTC's buffer without a copy");
++}
++
++- (void)testDecryptRejectsOutputLargerThanBuffer {
++  RTCFrameTransformDelegate *delegate = [[RTCFrameTransformDelegate alloc]
++      initWithTransform:AppendBytes(1, kFillByte)];
++  RTC_OBJC_TYPE(RTCFrameDecryptor) *decryptor =
++      [[RTC_OBJC_TYPE(RTCFrameDecryptor) alloc] initWithSizeChange:0];
++  decryptor.delegate = delegate;
++  webrtc::scoped_refptr<webrtc::FrameDecryptorInterface> native =
++      decryptor.nativeFrameDecryptor;
++
++  const std::vector<uint8_t> encrypted = {1, 2, 3};
++  std::vector<uint8_t> output(native->GetMaxPlaintextByteSize(
++      webrtc::MediaType::AUDIO, encrypted.size()));
++  webrtc::FrameDecryptorInterface::Result result =
++      native->Decrypt(webrtc::MediaType::AUDIO, {}, {}, encrypted, output);
++
++  XCTAssertEqual(result.status,
++                 webrtc::FrameDecryptorInterface::Status::kFailedToDecrypt);
++  XCTAssertEqual(result.bytes_written, 0u);
++  XCTAssertTrue((output == std::vector<uint8_t>(3, 0)),
++                @"Buffer must stay untouched when output does not fit");
++}
++
++- (void)testDecryptFailsWithoutDelegate {
++  RTC_OBJC_TYPE(RTCFrameDecryptor) *decryptor =
++      [[RTC_OBJC_TYPE(RTCFrameDecryptor) alloc] initWithSizeChange:0];
++  webrtc::scoped_refptr<webrtc::FrameDecryptorInterface> native =
++      decryptor.nativeFrameDecryptor;
++
++  const std::vector<uint8_t> encrypted = {1, 2, 3};
++  std::vector<uint8_t> output(3);
++  webrtc::FrameDecryptorInterface::Result result =
++      native->Decrypt(webrtc::MediaType::AUDIO, {}, {}, encrypted, output);
++
++  XCTAssertEqual(result.status,
++                 webrtc::FrameDecryptorInterface::Status::kFailedToDecrypt);
++}
++
++- (void)testMaxSizeAppliesSizeChangeAndClampsAtZero {
++  RTC_OBJC_TYPE(RTCFrameEncryptor) *growing =
++      [[RTC_OBJC_TYPE(RTCFrameEncryptor) alloc] initWithSizeChange:28];
++  RTC_OBJC_TYPE(RTCFrameDecryptor) *shrinking =
++      [[RTC_OBJC_TYPE(RTCFrameDecryptor) alloc] initWithSizeChange:-28];
++
++  XCTAssertEqual(growing.nativeFrameEncryptor->GetMaxCiphertextByteSize(
++                     webrtc::MediaType::VIDEO, 100),
++                 128u);
++  XCTAssertEqual(shrinking.nativeFrameDecryptor->GetMaxPlaintextByteSize(
++                     webrtc::MediaType::VIDEO, 100),
++                 72u);
++  XCTAssertEqual(shrinking.nativeFrameDecryptor->GetMaxPlaintextByteSize(
++                     webrtc::MediaType::VIDEO, 10),
++                 0u,
++                 @"A negative size change must not wrap around");
++}
++
++- (void)testSetRtcFrameCryptorsAttachToNativeSenderAndReceiver {
++  RTC_OBJC_TYPE(RTCConfiguration) *config =
++      [[RTC_OBJC_TYPE(RTCConfiguration) alloc] init];
++  config.sdpSemantics = RTCSdpSemanticsUnifiedPlan;
++  RTC_OBJC_TYPE(RTCMediaConstraints) *constraints =
++      [[RTC_OBJC_TYPE(RTCMediaConstraints) alloc]
++          initWithMandatoryConstraints:@{}
++                   optionalConstraints:nil];
++  RTC_OBJC_TYPE(RTCRtpTransceiverInit) *init =
++      [[RTC_OBJC_TYPE(RTCRtpTransceiverInit) alloc] init];
++  RTC_OBJC_TYPE(RTCFrameEncryptor) *encryptor =
++      [[RTC_OBJC_TYPE(RTCFrameEncryptor) alloc] initWithSizeChange:28];
++  RTC_OBJC_TYPE(RTCFrameDecryptor) *decryptor =
++      [[RTC_OBJC_TYPE(RTCFrameDecryptor) alloc] initWithSizeChange:0];
++
++  @autoreleasepool {
++    RTC_OBJC_TYPE(RTCPeerConnectionFactory) *factory =
++        [[RTC_OBJC_TYPE(RTCPeerConnectionFactory) alloc] init];
++    RTC_OBJC_TYPE(RTCPeerConnection) *peerConnection =
++        [factory peerConnectionWithConfiguration:config
++                                     constraints:constraints
++                                        delegate:nil];
++    RTC_OBJC_TYPE(RTCRtpTransceiver) *transceiver =
++        [peerConnection addTransceiverOfType:RTCRtpMediaTypeVideo init:init];
++    XCTAssertNotNil(transceiver);
++
++    [transceiver.sender setRtcFrameEncryptor:encryptor];
++    [transceiver.receiver setRtcFrameDecryptor:decryptor];
++
++    XCTAssertTrue(transceiver.sender.nativeRtpSender->GetFrameEncryptor() ==
++                  encryptor.nativeFrameEncryptor);
++    XCTAssertTrue(transceiver.receiver.nativeRtpReceiver->GetFrameDecryptor() ==
++                  decryptor.nativeFrameDecryptor);
++
++    [peerConnection close];
++  }
++}
++
++@end

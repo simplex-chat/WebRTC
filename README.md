@@ -1,11 +1,12 @@
 # WebRTC Binaries for iOS and macOS
 [![Latest version](https://img.shields.io/github/v/release/stasel/webrtc)](https://github.com/stasel/WebRTC/releases)
-[![Release Date](https://img.shields.io/github/release-date/stasel/webrtc)](https://github.com/stasel/WebRTC/releases)
-[![Total Downloads](https://img.shields.io/github/downloads/stasel/webrtc/total)](https://github.com/stasel/WebRTC/releases)
 [![Cocoapods](https://img.shields.io/cocoapods/v/WebRTC-lib)](https://cocoapods.org/pods/WebRTC-lib)
+[![Release Date](https://img.shields.io/github/release-date/stasel/webrtc)](https://github.com/stasel/WebRTC/releases)
+[![GitHub Actions Workflow Status](https://img.shields.io/github/actions/workflow/status/stasel/WebRTC/webrtc-release.yml?branch=latest&label=Release%20job)](https://github.com/stasel/WebRTC/actions/workflows/webrtc-release.yml)
+[![Total Downloads](https://img.shields.io/github/downloads/stasel/webrtc/total)](https://github.com/stasel/WebRTC/releases)
 
 
-This repository contains unofficial distribution of WebRTC framework binaries for iOS and macOS.
+This repository contains a community-driven distribution of WebRTC framework binaries for iOS and macOS.
 
 Since version M80, Google has [deprecated](https://groups.google.com/g/discuss-webrtc/c/Ozvbd0p7Q1Y/m/M4WN2cRKCwAJ?pli=1) their mobile binary libraries distributions (Was officially using the [GoogleWebRTC pod](https://cocoapods.org/pods/GoogleWebRTC)). To get the most up to date WebRTC library, you can compile it on your own, or you can use precompiled binaries from here or other sources.
 
@@ -13,13 +14,17 @@ Since version M80, Google has [deprecated](https://groups.google.com/g/discuss-w
 The binary releases correspond with official Chromium releases and branches as specified in the [Chromium dashboard](https://chromiumdash.appspot.com/branches).
 
 ## 💡 Things to know
-* All binaries in this repository are compiled from the official WebRTC [source code](https://webrtc.googlesource.com/src/) without any modifications to the source code or to the output binaries.
+* All binaries in this repository are compiled from the official WebRTC [source code](https://webrtc.googlesource.com/src/) .
+* No modifications are made to the source code or the output binaries.
+* The build process is open source using GitHub actions.
 * Dynamic framework (xcframework format) which contains multiple binaries for macOS and iOS.
-* Since [Xcode 14](https://developer.apple.com/documentation/Xcode-Release-Notes/xcode-14-release-notes), bitcode is deprecated. Version M103 and above does not include bitcode.
+* Added support for extra encodings: VP9, H264 and AV1.
+* H.265 / HEVC: the SDP negotiation and RTP packetization layer is compiled but WebRTC ships no HEVC encoder or decoder for Apple platforms.
+* dSYM files are included in case you need them. You can download them from the [releases page](https://github.com/stasel/WebRTC/releases). *(Available from version M152).*
 
 ## 📢 Requirements
-* iOS 12+
-* macOS 10.11+
+* iOS 15+
+* macOS 12+
 * macOS Catalyst 11.0+
 
 ## 📀 Binaries included
@@ -40,7 +45,7 @@ Xcode has a built-in support for Swift package manager. You can easily add the p
 Or, you can add the following dependency to your `Package.swift` file:
 ```swift
 dependencies: [
-    .package(url: "https://github.com/stasel/WebRTC.git", .upToNextMajor("110.0.0"))
+    .package(url: "https://github.com/stasel/WebRTC.git", .upToNextMajor("155.0.0"))
 ]
 ```
 
@@ -65,7 +70,6 @@ pod install
 Read more about Cocoapods: https://cocoapods.org
 
 ### Carthage
-**Requires Carthage version 0.38 or higher**
 
 Add the following dependency to the `Cartfile` in your project:
 ```
@@ -96,10 +100,10 @@ If you wish to see how to use WebRTC I highly recommend checking out my WebRTC d
 
 ## 🛠 Compile your own WebRTC Frameworks
 If you wish to compile your own WebRTC binary framework, please refer to the following official guide:
-https://webrtc.googlesource.com/src/+/refs/heads/master/docs/native-code/ios/index.md
+https://webrtc.googlesource.com/src/+/refs/heads/main/docs/native-code/ios/README.md
 
 You can also take a look at the [build script](scripts/build.sh) I created for more details.
 
-## 📃 License
-* BSD 3-Clause License
+## 📃 Licenses
+* Build scripts (this repository): `BSD 3-Clause License`
 * WebRTC License: https://webrtc.org/support/license

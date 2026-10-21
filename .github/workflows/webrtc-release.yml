@@ -2,7 +2,7 @@ name: WebRTC Release
 run-name: WebRTC Release
 
 env:
-  XCODE_VERSION: 26.5
+  XCODE_VERSION: 26.6
 
 on:
   workflow_dispatch:

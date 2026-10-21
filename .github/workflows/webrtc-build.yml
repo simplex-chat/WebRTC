@@ -2,7 +2,7 @@ name: WebRTC Manual Build
 run-name: WebRTC Manual Build
 
 env:
-  XCODE_VERSION: 26.5
+  XCODE_VERSION: 26.6
 
 on:
   workflow_dispatch:

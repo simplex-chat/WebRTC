@@ -1,8 +1,9 @@
-name: WebRTC Manual Build
-run-name: WebRTC Manual Build
+name: WebRTC Build
+run-name: WebRTC Build
 
 env:
   XCODE_VERSION: 26.6
+  WEBRTC_BRANCH: branch-heads/8078
 
 on:
   workflow_dispatch:
@@ -10,7 +11,7 @@ on:
       branch:
         description: "webRTC branch head. Ex: branch-heads/6167"
         required: true
-        default: "branch-heads/0000"
+        default: "branch-heads/8078"
         type: string
       ios:
         description: "Build iOS libraries"
@@ -27,6 +28,14 @@ on:
         required: true
         default: false
         type: boolean
+  push:
+    paths:
+      - ".github/workflows/webrtc-build.yml"
+      - "patches/**"
+      - "scripts/**"
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
   Build-Script:
     runs-on: macos-latest
@@ -49,10 +58,10 @@ jobs:
           sh scripts/clean.sh
           sh scripts/build.sh
         env:
-          BRANCH: ${{ inputs.branch }}
-          IOS: ${{ inputs.ios }}
-          MACOS: ${{ inputs.macos }}
-          MAC_CATALYST: ${{ inputs.maccatalyst }}
+          BRANCH: ${{ inputs.branch || env.WEBRTC_BRANCH }}
+          IOS: ${{ github.event_name == 'push' || inputs.ios }}
+          MACOS: ${{ github.event_name == 'workflow_dispatch' && inputs.macos }}
+          MAC_CATALYST: ${{ github.event_name == 'workflow_dispatch' && inputs.maccatalyst }}
       - name: Upload framework
         uses: actions/upload-artifact@v6
         with:

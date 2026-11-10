@@ -6,6 +6,12 @@ env:
 
 on:
   workflow_dispatch:
+    inputs:
+      version:
+        description: "Release this version of an already released milestone. Ex: 156.0.1; empty releases the next milestone"
+        required: false
+        default: ""
+        type: string
 permissions:
   contents: write
   pull-requests: write
@@ -38,6 +44,8 @@ jobs:
         run: pip install requests
 
       - name: Running WebRTC release checks
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
         run: |
           sh scripts/clean.sh
           python -u scripts/release.py

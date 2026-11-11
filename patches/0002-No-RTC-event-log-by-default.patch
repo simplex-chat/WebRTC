@@ -1,0 +1,14 @@
+diff --git a/sdk/objc/api/peerconnection/RTCPeerConnectionFactory.mm b/sdk/objc/api/peerconnection/RTCPeerConnectionFactory.mm
+--- a/sdk/objc/api/peerconnection/RTCPeerConnectionFactory.mm
++++ b/sdk/objc/api/peerconnection/RTCPeerConnectionFactory.mm
+@@ -238,10 +238,6 @@
+         std::make_unique<webrtc::BuiltinAudioProcessingBuilder>();
+   }
+ #endif
+-  if (dependencies.event_log_factory == nullptr) {
+-    dependencies.event_log_factory =
+-        std::make_unique<webrtc::RtcEventLogFactory>();
+-  }
+   webrtc::EnableMedia(dependencies);
+   return [self initWithNativeDependencies:dependencies];
+ }

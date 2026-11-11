@@ -6,12 +6,14 @@ from dataclasses import dataclass
 
 GITHUB_TOKEN=os.environ.get("GITHUB_TOKEN")
 GITHUB_REPO=os.environ.get("GITHUB_REPOSITORY", "stasel/WebRTC")
+RELEASE_VERSION=os.environ.get("RELEASE_VERSION")
 
 @dataclass
 class NextReleaseResult:
     version: int
     releaseDate: datetime
     branch: str
+    tag: str
 
 @dataclass
 class BuildMetadata:
@@ -56,11 +58,16 @@ def getNextRelease():
     nextReleaseDate = datetime.fromisoformat(milestones["mstones"][0]["stable_date"])
     print(f"Next release:   version {nextReleaseVersion}, date: {nextReleaseDate}")
 
-    # Get next version branch
-    releases = requests.get(f"https://chromiumdash.appspot.com/fetch_milestones?mstone={nextReleaseVersion}").json()
-    nextReleaseBranch = "branch-heads/" + releases[0]["webrtc_branch"]
+    return NextReleaseResult(version = nextReleaseVersion, releaseDate = nextReleaseDate, branch = getMilestoneBranch(nextReleaseVersion), tag = f"{nextReleaseVersion}.0.0")
 
-    return NextReleaseResult(version = nextReleaseVersion, releaseDate = nextReleaseDate, branch = nextReleaseBranch)
+def getRequestedRelease(tag):
+    version = int(tag.split(".")[0])
+    print(f"Requested release: {tag} of M{version}")
+    return NextReleaseResult(version = version, releaseDate = datetime.today(), branch = getMilestoneBranch(version), tag = tag)
+
+def getMilestoneBranch(version):
+    releases = requests.get(f"https://chromiumdash.appspot.com/fetch_milestones?mstone={version}").json()
+    return "branch-heads/" + releases[0]["webrtc_branch"]
 
 def isReleaseAvailable(release):
     return datetime.today() >= (release.releaseDate + timedelta(days=1))
@@ -86,7 +93,7 @@ def createReleaseDraft(release, buildMetadata):
 
     fields = { 
         'name': f'M{release.version}',
-        'tag_name': f'{release.version}.0.0',
+        'tag_name': release.tag,
         'draft': True,
         'body': body
     }
@@ -108,10 +115,10 @@ def uploadReleaseAsset(url, assetLocalPath, assetName):
 def createPullRequest(release, head):
     headers = {'accept': 'application/vnd.github.v3+json', 'Authorization': f'token {GITHUB_TOKEN}'}
     body = { 
-        'title': f'Release M{release.version}',
+        'title': f'Release {release.tag}',
         'head': head,
         'base': 'latest',
-        'body': f'Updated files for release M{release.version}.'
+        'body': f'Updated files for release {release.tag}.'
     }
     response = requests.post(f"https://api.github.com/repos/{GITHUB_REPO}/pulls", json = body, headers = headers)
     success = response.status_code == requests.codes.created
@@ -126,10 +133,10 @@ if __name__ == "__main__":
 
     # Get next release details
     print("➡️ Fetching next release...")
-    nextRelease = getNextRelease()
+    nextRelease = getRequestedRelease(RELEASE_VERSION) if RELEASE_VERSION else getNextRelease()
 
     # Check if it is time for a new reelease
-    if not isReleaseAvailable(nextRelease):
+    if not RELEASE_VERSION and not isReleaseAvailable(nextRelease):
         print("ℹ️  Next version is not out yet. Skipping build")
         os._exit(os.EX_OK)
 
@@ -177,19 +184,19 @@ if __name__ == "__main__":
 
     # Create new branch with code changes
     print("➡️ Creating local branch...")
-    releaseBranch = f'release-M{nextRelease.version}'
+    releaseBranch = f'release-{nextRelease.tag}'
     os.system(f'git checkout -b {releaseBranch}')
 
     # Change code
     print("➡️ Applying code changes...")
-    os.system(f"sed -i '' -E 's/[0-9]+\\.[0-9]+\\.[0-9]+\\/WebRTC-M[0-9.]+\\.xcframework/{nextRelease.version}.0.0\\/WebRTC-M{nextRelease.version}.xcframework/g' Package.swift WebRTC-lib.podspec")
+    os.system(f"sed -i '' -E 's/[0-9]+\\.[0-9]+\\.[0-9]+\\/WebRTC-M[0-9.]+\\.xcframework/{nextRelease.tag}\\/WebRTC-M{nextRelease.version}.xcframework/g' Package.swift WebRTC-lib.podspec")
     os.system(f"sed -i '' -E 's/checksum: \"[0-9a-f]+\"/checksum: \"{buildMetadata.checksum}\"/g' Package.swift WebRTC-lib.podspec ")
-    os.system(f"sed -i '' -E 's/.upToNextMajor\\(\"[0-9]+\\.[0-9]+\\.[0-9]+/.upToNextMajor\\(\"{nextRelease.version}.0.0/g' README.md")
-    os.system(f"sed -i '' -E 's/spec.version      = \"[0-9]+\\.[0-9]+\\.[0-9]+\"/spec.version      = \"{nextRelease.version}.0.0\"/g' WebRTC-lib.podspec")
+    os.system(f"sed -i '' -E 's/.upToNextMajor\\(\"[0-9]+\\.[0-9]+\\.[0-9]+/.upToNextMajor\\(\"{nextRelease.tag}/g' README.md")
+    os.system(f"sed -i '' -E 's/spec.version      = \"[0-9]+\\.[0-9]+\\.[0-9]+\"/spec.version      = \"{nextRelease.tag}\"/g' WebRTC-lib.podspec")
     cartageFile = open("WebRTC.json", 'r')
 
     cartageJSON = json.loads(cartageFile.read())
-    cartageJSON[f'{nextRelease.version}.0.0'] = f'https://github.com/{GITHUB_REPO}/releases/download/{nextRelease.version}.0.0/WebRTC-M{nextRelease.version}.xcframework.zip'
+    cartageJSON[nextRelease.tag] = f'https://github.com/{GITHUB_REPO}/releases/download/{nextRelease.tag}/WebRTC-M{nextRelease.version}.xcframework.zip'
     cartageFile.close()
     cartageJSONWrite = open("WebRTC.json", 'w')
     cartageJSONWrite.write(json.dumps(cartageJSON, indent=4, sort_keys=True))
@@ -199,7 +206,7 @@ if __name__ == "__main__":
     # Commit and push
     print("➡️ Committing and pushing code to remote...")
     os.system(f'git add Package.swift WebRTC-lib.podspec README.md WebRTC.json')
-    os.system(f'git commit -m "Updated files for release M{nextRelease.version}"')
+    os.system(f'git commit -m "Updated files for release {nextRelease.tag}"')
     os.system(f'git push origin {releaseBranch}')
 
     # Create PR
